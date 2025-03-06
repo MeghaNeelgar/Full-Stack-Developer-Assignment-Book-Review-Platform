@@ -1,0 +1,105 @@
+const express = require('express');
+const mongoose = require('mongoose');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const cors = require('cors');
+require('dotenv').config();
+
+const app = express();
+app.use(express.json());
+app.use(cors());
+
+mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+  .then(() => console.log('MongoDB Connected'))
+  .catch(err => console.log(err));
+
+// Models
+const User = mongoose.model('User', new mongoose.Schema({
+  username: String,
+  email: String,
+  password: String,
+  isAdmin: Boolean,
+}));
+
+const Book = mongoose.model('Book', new mongoose.Schema({
+  title: String,
+  author: String,
+  description: String,
+  coverImage: String,
+  rating: Number,
+}));
+
+const Review = mongoose.model('Review', new mongoose.Schema({
+  bookId: mongoose.Schema.Types.ObjectId,
+  userId: mongoose.Schema.Types.ObjectId,
+  reviewText: String,
+  rating: Number,
+  likes: { type: Number, default: 0 },
+  dislikes: { type: Number, default: 0 },
+}));
+
+// Register User
+app.post('/register', async (req, res) => {
+  const { username, email, password, isAdmin } = req.body;
+  const hashedPassword = await bcrypt.hash(password, 10);
+  const user = new User({ username, email, password: hashedPassword, isAdmin });
+  await user.save();
+  res.json({ message: 'User registered' });
+});
+
+// Login
+app.post('/login', async (req, res) => {
+  const { email, password } = req.body;
+  const user = await User.findOne({ email });
+  if (!user || !(await bcrypt.compare(password, user.password))) {
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
+  const token = jwt.sign({ userId: user._id, isAdmin: user.isAdmin }, process.env.JWT_SECRET);
+  res.json({ token });
+});
+
+// Get Books (with pagination)
+app.get('/books', async (req, res) => {
+  const { page = 1, limit = 10 } = req.query;
+  const books = await Book.find().limit(limit * 1).skip((page - 1) * limit);
+  res.json(books);
+});
+
+// Add Book (Admin only)
+app.post('/books', async (req, res) => {
+  const { title, author, description, coverImage, rating } = req.body;
+  const book = new Book({ title, author, description, coverImage, rating });
+  await book.save();
+  res.json(book);
+});
+
+// Get Reviews for a Book
+app.get('/reviews/:bookId', async (req, res) => {
+  const { bookId } = req.params;
+  const reviews = await Review.find({ bookId });
+  res.json(reviews);
+});
+
+// Submit Review
+app.post('/reviews', async (req, res) => {
+  const { bookId, userId, reviewText, rating } = req.body;
+  const review = new Review({ bookId, userId, reviewText, rating });
+  await review.save();
+  res.json(review);
+});
+
+// Like/Dislike a Review
+app.post('/reviews/:id/like', async (req, res) => {
+  const { id } = req.params;
+  await Review.findByIdAndUpdate(id, { $inc: { likes: 1 } });
+  res.json({ message: 'Liked' });
+});
+
+app.post('/reviews/:id/dislike', async (req, res) => {
+  const { id } = req.params;
+  await Review.findByIdAndUpdate(id, { $inc: { dislikes: 1 } });
+  res.json({ message: 'Disliked' });
+});
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
